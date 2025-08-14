@@ -36,6 +36,8 @@ type Params = {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+
+
 const PRODUCT_BASE_QUERY = /* GraphQL */ `
   query BaseProduct($id: ID!) {
     product(id: $id) {
@@ -98,6 +100,8 @@ const VARIANTS_BULK_CREATE = /* GraphQL */ `
     }
   }
 `;
+
+
 
 export const run = async ({ params, connections, logger }: any) => {
   const p = params as unknown as Params;
@@ -201,11 +205,13 @@ export const run = async ({ params, connections, logger }: any) => {
       logger.error({ errs, productInput }, "productCreate failed");
       throw new Error(`Failed to create duplicate #${idx + 1}: ${errs.map((e: any) => e.message).join("; ")}`);
     }
-  const created = createJson?.productCreate?.product ?? createJson?.data?.productCreate?.product;
+    const created = createJson?.productCreate?.product ?? createJson?.data?.productCreate?.product;
     const newProductId: string | undefined = created?.id;
     if (!newProductId) throw new Error("productCreate returned no product id");
     console.log("[bulkDuplicateProducts] created product", newProductId);
     newProductIds.push(newProductId);
+
+
 
     // Replicate variants "as-is" (no images): build from base variants' selectedOptions and price
     const baseVariants: any[] = base.variants?.nodes ?? [];

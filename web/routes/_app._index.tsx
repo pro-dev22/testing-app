@@ -32,6 +32,15 @@ type SelectedProduct = {
   id: string; // gid://shopify/Product/xxx
   title?: string;
   handle?: string;
+  status?: string;
+  collections?: any[];
+  metafields?: any[];
+  inventory?: any[];
+  description?: string;
+  vendor?: string;
+  productType?: string;
+  price?: string;
+  tags?: string[] | string;
 };
 
 type DuplicateRow = {
@@ -107,8 +116,22 @@ export default function DuplicatePage() {
           setSelectedProduct(null);
           return;
         }
-        const gid = rawId?.startsWith("gid://") ? rawId : `gid://shopify/Product/${rawId}`;
-        setSelectedProduct({ id: gid, title: prod?.title,  });
+                 const gid = rawId?.startsWith("gid://") ? rawId : `gid://shopify/Product/${rawId}`;
+         setSelectedProduct({ id: gid, title: prod?.title, status: prod?.status, collections: prod?.collections, metafields: prod?.metafields, inventory: prod?.inventory, description: prod?.description, vendor: prod?.vendor, productType: prod?.productType, price: prod?.price });
+         
+                   // Pre-populate the first row with the selected product's data for easy modification
+          if (prod) {
+            setRows([{
+              title: prod.title || "",
+              imageFiles: [],
+              imageUrls: [],
+              descriptionHtml: prod.descriptionHtml || prod.description || "",
+              vendor: prod.vendor || "",
+              tags: Array.isArray(prod.tags) ? prod.tags.join(", ") : prod.tags || "",
+              productType: prod.productType || "",
+              price: prod.price || prod.variants?.[0]?.price || "",
+            }]);
+          }
       }
     } catch (err) {
       console.error("[duplicate/ui] picker error", err);
@@ -198,26 +221,67 @@ export default function DuplicatePage() {
       return;
     }
     console.debug("[duplicate/ui] building payload", { selectedProduct, rowsCount: rows.length, stagedRows: stagedByRow.length });
+    
+    // Check if any fields are selected for customization
+    const hasCustomFields = Object.values(fields).some(Boolean);
+    
     const payload = {
       sourceProductId: selectedProduct.id?.startsWith("gid://") ? selectedProduct.id : `gid://shopify/Product/${selectedProduct.id}`,
-      duplicates: rows.map((r, ri) => ({
-        title: fields.title ? r.title : undefined,
-        imageUrls: fields.images
-          ? [
+      duplicates: rows.map((r, ri) => {
+        // If no fields are selected, send empty object to use all original data
+        if (!hasCustomFields) {
+          return {};
+        }
+        
+        // Otherwise, only include fields that are selected for customization
+        const duplicateData: any = {};
+        
+        if (fields.title && r.title?.trim()) {
+          duplicateData.title = r.title.trim();
+        }
+        
+        if (fields.images) {
+          const imageUrls = [
             ...((stagedByRow.find((x) => ri === x.i)?.urls) ?? []),
             ...(r.imageUrls ?? []),
-          ]
-          : undefined,
-        descriptionHtml: fields.descriptionHtml ? r.descriptionHtml : undefined,
-        vendor: fields.vendor ? r.vendor : undefined,
-        tags: fields.tags ? (r.tags ? r.tags.split(",").map((t) => t.trim()).filter(Boolean) : []) : undefined,
-        productType: fields.productType ? r.productType : undefined,
-        price: fields.price ? r.price : undefined,
-      })),
+          ];
+          if (imageUrls.length > 0) {
+            duplicateData.imageUrls = imageUrls;
+          }
+        }
+        
+        if (fields.descriptionHtml && r.descriptionHtml?.trim()) {
+          duplicateData.descriptionHtml = r.descriptionHtml.trim();
+        }
+        
+        if (fields.vendor && r.vendor?.trim()) {
+          duplicateData.vendor = r.vendor.trim();
+        }
+        
+        if (fields.tags && r.tags?.trim()) {
+          duplicateData.tags = r.tags.split(",").map((t) => t.trim()).filter(Boolean);
+        }
+        
+        if (fields.productType && r.productType?.trim()) {
+          duplicateData.productType = r.productType.trim();
+        }
+        
+                   if (fields.price && r.price?.trim()) {
+            duplicateData.price = r.price.trim();
+          }
+          
+          return duplicateData;
+      }),
     };
 
     console.debug("[duplicate/ui] submitting payload", payload);
     console.log("[duplicate/ui] submitting payload", payload);
+    console.log("[duplicate/ui] payload details:", {
+      sourceProductId: payload.sourceProductId,
+      duplicatesCount: payload.duplicates.length,
+      hasCustomFields,
+      firstDuplicate: payload.duplicates[0]
+    });
     try {
       const client: any = api as any;
       const result = client.bulkDuplicateProducts?.run
@@ -312,8 +376,20 @@ export default function DuplicatePage() {
                           <Checkbox label="Vendor" checked={fields.vendor} onChange={(v) => setFields((f) => ({ ...f, vendor: v }))} />
                           <Checkbox label="Tags (comma separated)" checked={fields.tags} onChange={(v) => setFields((f) => ({ ...f, tags: v }))} />
                           <Checkbox label="Product type" checked={fields.productType} onChange={(v) => setFields((f) => ({ ...f, productType: v }))} />
-                          <Checkbox label="Price (initial variant)" checked={fields.price} onChange={(v) => setFields((f) => ({ ...f, price: v }))} />
+                                                     <Checkbox label="Price (initial variant)" checked={fields.price} onChange={(v) => setFields((f) => ({ ...f, price: v }))} />
                         </BlockStack>
+                        {!Object.values(fields).some(Boolean) && (
+                          <Banner tone="info">
+                            <Text as="p" variant="bodyMd">
+                              No fields selected for customization. Products will be duplicated with all original data.
+                            </Text>
+                          </Banner>
+                        )}
+                                                 <Banner tone="success">
+                           <Text as="p" variant="bodyMd">
+                             <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product.
+                           </Text>
+                         </Banner>
                       </BlockStack>
                       <BlockStack gap="300">
                         <Text as="h3" variant="headingMd">Quantity</Text>
@@ -360,7 +436,7 @@ export default function DuplicatePage() {
                       loading={isSubmitting}
                       onClick={onSubmit}
                     >
-                      {isSubmitting ? "Creating products..." : `Create ${qty} duplicate${qty > 1 ? "s" : ""}`}
+                      {isSubmitting ? "Creating products..." : `Create ${qty} duplicate${qty > 1 ? "s" : ""}${!Object.values(fields).some(Boolean) ? " (exact copy)" : ""}`}
                     </Button>
                   </InlineStack>
                 </Box>
@@ -383,6 +459,27 @@ export default function DuplicatePage() {
         >
           <Modal.Section>
             <BlockStack gap="400">
+              {selectedProduct && (
+                <InlineStack align="end">
+                  <Button
+                    variant="plain"
+                    onClick={() => {
+                      if (selectedProduct) {
+                                                                                                   updateRow(activeModalRow, {
+                            title: selectedProduct.title || "",
+                            descriptionHtml: selectedProduct.description || "",
+                            vendor: selectedProduct.vendor || "",
+                            tags: Array.isArray(selectedProduct.tags) ? selectedProduct.tags.join(", ") : selectedProduct.tags || "",
+                            productType: selectedProduct.productType || "",
+                            price: selectedProduct.price || "",
+                          });
+                      }
+                    }}
+                  >
+                    Reset to Original
+                  </Button>
+                </InlineStack>
+              )}
               {fields.title && (
                 <TextField label="New product title" value={modalRow.title ?? ""} onChange={(v) => updateRow(activeModalRow, { title: v })} autoComplete="off" />
               )}
@@ -395,12 +492,13 @@ export default function DuplicatePage() {
               {fields.tags && (
                 <TextField label="Tags (comma separated)" value={modalRow.tags ?? ""} onChange={(v) => updateRow(activeModalRow, { tags: v })} autoComplete="off" />
               )}
-              {fields.productType && (
-                <TextField label="Product type" value={modalRow.productType ?? ""} onChange={(v) => updateRow(activeModalRow, { productType: v })} autoComplete="off" />
-              )}
-              {fields.price && (
-                <TextField type="number" label="Price" value={modalRow.price ?? ""} onChange={(v) => updateRow(activeModalRow, { price: v })} autoComplete="off" />
-              )}
+                                            {fields.productType && (
+                 <TextField label="Product type" value={modalRow.productType ?? ""} onChange={(v) => updateRow(activeModalRow, { productType: v })} autoComplete="off" />
+               )}
+               {fields.price && (
+                 <TextField type="number" label="Price" value={modalRow.price ?? ""} onChange={(v) => updateRow(activeModalRow, { price: v })} autoComplete="off" />
+               )}
+               
               {fields.images && (
                 <BlockStack gap="200">
                   <Text as="h4" variant="headingSm">Replacement images</Text>
@@ -421,10 +519,10 @@ export default function DuplicatePage() {
                   <InlineStack gap="200" align="start">
                     <TextField label="Or add image URL" autoComplete="off" value={modalRow.tempUrl ?? ""} onChange={(v) => updateRow(activeModalRow, { tempUrl: v })} />
                     <Button onClick={() => {
-                        const v = (modalRow.tempUrl ?? "").trim();
-                        if (!v) return;
-                        updateRow(activeModalRow, { imageUrls: [...modalRow.imageUrls, v], tempUrl: "" });
-                      }}
+                      const v = (modalRow.tempUrl ?? "").trim();
+                      if (!v) return;
+                      updateRow(activeModalRow, { imageUrls: [...modalRow.imageUrls, v], tempUrl: "" });
+                    }}
                     >Add URL</Button>
                   </InlineStack>
                 </BlockStack>
