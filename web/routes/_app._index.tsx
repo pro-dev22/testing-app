@@ -53,6 +53,7 @@ type DuplicateRow = {
   tags?: string;
   productType?: string;
   price?: string;
+  imageOrder: number[]; // array of indices representing the order of images
 };
 
 export const loader = async ({ context }: LoaderFunctionArgs) => {
@@ -89,14 +90,14 @@ export default function DuplicatePage() {
   const [quantity, setQuantity] = useState("1");
   const qty = Math.max(1, Number.isFinite(Number(quantity)) ? Number(quantity) : 1);
 
-  const [rows, setRows] = useState<DuplicateRow[]>([{ title: "", imageFiles: [], imageUrls: [] }]);
+  const [rows, setRows] = useState<DuplicateRow[]>([{ title: "", imageFiles: [], imageUrls: [], imageOrder: [] }]);
   const [createdLinks, setCreatedLinks] = useState<string[] | null>(null);
 
   useEffect(() => {
     // ensure rows length matches quantity
     setRows((prev) => {
       const next = [...prev];
-      while (next.length < qty) next.push({ title: "", imageFiles: [], imageUrls: [] });
+      while (next.length < qty) next.push({ title: "", imageFiles: [], imageUrls: [], imageOrder: [] });
       while (next.length > qty) next.pop();
       return next;
     });
@@ -130,6 +131,7 @@ export default function DuplicatePage() {
               tags: Array.isArray(prod.tags) ? prod.tags.join(", ") : prod.tags || "",
               productType: prod.productType || "",
               price: prod.price || prod.variants?.[0]?.price || "",
+              imageOrder: [],
             }]);
           }
       }
@@ -168,12 +170,153 @@ export default function DuplicatePage() {
     });
   };
 
+  // Helper functions for image ordering
+  const addImageFiles = (rowIndex: number, files: File[]) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const currentRow = next[rowIndex];
+      const newFiles = [...currentRow.imageFiles, ...files];
+      const newOrder = [...currentRow.imageOrder];
+      
+      // Add new indices to the order array
+      for (let i = 0; i < files.length; i++) {
+        newOrder.push(currentRow.imageFiles.length + i);
+      }
+      
+      next[rowIndex] = { ...currentRow, imageFiles: newFiles, imageOrder: newOrder };
+      return next;
+    });
+  };
+
+  const addImageUrl = (rowIndex: number, url: string) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const currentRow = next[rowIndex];
+      const newUrls = [...currentRow.imageUrls, url];
+      const newOrder = [...currentRow.imageOrder];
+      
+      // Add new index for the URL (negative to distinguish from file indices)
+      newOrder.push(-(currentRow.imageUrls.length + 1));
+      
+      next[rowIndex] = { ...currentRow, imageUrls: newUrls, imageOrder: newOrder };
+      return next;
+    });
+  };
+
+  const removeImageAt = (rowIndex: number, imageIndex: number, isFile: boolean) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const currentRow = next[rowIndex];
+      
+      if (isFile) {
+        const newFiles = [...currentRow.imageFiles];
+        newFiles.splice(imageIndex, 1);
+        
+        // Update order array to remove the deleted index and adjust remaining indices
+        const newOrder = currentRow.imageOrder
+          .filter(orderIndex => orderIndex !== imageIndex)
+          .map(orderIndex => orderIndex > imageIndex ? orderIndex - 1 : orderIndex);
+        
+        next[rowIndex] = { ...currentRow, imageFiles: newFiles, imageOrder: newOrder };
+      } else {
+        const newUrls = [...currentRow.imageUrls];
+        newUrls.splice(imageIndex, 1);
+        
+        // Update order array to remove the deleted URL index and adjust remaining indices
+        const newOrder = currentRow.imageOrder
+          .filter(orderIndex => orderIndex !== -(imageIndex + 1))
+          .map(orderIndex => orderIndex < 0 && Math.abs(orderIndex) > imageIndex + 1 ? orderIndex + 1 : orderIndex);
+        
+        next[rowIndex] = { ...currentRow, imageUrls: newUrls, imageOrder: newOrder };
+      }
+      
+      return next;
+    });
+  };
+
+  const reorderImages = (rowIndex: number, fromIndex: number, toIndex: number) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const currentRow = next[rowIndex];
+      const newOrder = [...currentRow.imageOrder];
+      
+      // Move the image from fromIndex to toIndex
+      const [movedItem] = newOrder.splice(fromIndex, 1);
+      newOrder.splice(toIndex, 0, movedItem);
+      
+      next[rowIndex] = { ...currentRow, imageOrder: newOrder };
+      return next;
+    });
+  };
+
+  const getOrderedImages = (row: DuplicateRow) => {
+    const allImages: Array<{ type: 'file' | 'url', index: number, data: File | string }> = [];
+    
+    // Add files with their indices
+    row.imageFiles.forEach((file, index) => {
+      allImages.push({ type: 'file', index, data: file });
+    });
+    
+    // Add URLs with their indices (using negative numbers)
+    row.imageUrls.forEach((url, index) => {
+      allImages.push({ type: 'url', index, data: url });
+    });
+    
+    // Sort based on the imageOrder array
+    if (row.imageOrder.length > 0) {
+      return row.imageOrder.map(orderIndex => {
+        if (orderIndex >= 0) {
+          // File index
+          return allImages.find(img => img.type === 'file' && img.index === orderIndex);
+        } else {
+          // URL index (negative)
+          const urlIndex = Math.abs(orderIndex) - 1;
+          return allImages.find(img => img.type === 'url' && img.index === urlIndex);
+        }
+      }).filter(Boolean);
+    }
+    
+    // If no order specified, return files first, then URLs
+    return allImages;
+  };
+
+  const resetImageOrder = (rowIndex: number) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const currentRow = next[rowIndex];
+      const newOrder: number[] = [];
+      
+      // Add file indices first
+      for (let i = 0; i < currentRow.imageFiles.length; i++) {
+        newOrder.push(i);
+      }
+      
+      // Add URL indices (negative)
+      for (let i = 0; i < currentRow.imageUrls.length; i++) {
+        newOrder.push(-(i + 1));
+      }
+      
+      next[rowIndex] = { ...currentRow, imageOrder: newOrder };
+      return next;
+    });
+  };
+
   const canSubmit = Boolean(selectedProduct) && rows.every((r) => !fields.title || r.title.trim().length > 0);
 
   const uploadImagesIfNeeded = async () => {
     console.debug("[duplicate/ui] uploadImagesIfNeeded start");
-    const allFiles: { i: number; file: File }[] = [];
-    rows.forEach((r, i) => r.imageFiles.forEach((file) => allFiles.push({ i, file })));
+    const allFiles: { i: number; file: File; orderIndex: number }[] = [];
+    
+    // Collect all files with their row index and order information
+    rows.forEach((r, i) => {
+      r.imageFiles.forEach((file, fileIndex) => {
+        const orderIndex = r.imageOrder.indexOf(fileIndex);
+        if (orderIndex !== -1) {
+          allFiles.push({ i, file, orderIndex });
+        }
+      });
+    });
+    
     if (allFiles.length === 0) return [] as { i: number; urls: string[] }[];
 
     const reqFiles = allFiles.map(({ file }) => ({ filename: file.name, mimeType: file.type || "image/jpeg", size: file.size }));
@@ -189,9 +332,11 @@ export default function DuplicatePage() {
     if (targets.length !== allFiles.length) throw new Error("Staged uploads count mismatch");
 
     const perRowUrls: { i: number; urls: string[] }[] = rows.map((_r, i) => ({ i, urls: [] }));
+    
+    // Upload files and maintain order
     await Promise.all(
       targets.map(async (t, idx) => {
-        const { i, file } = allFiles[idx];
+        const { i, file, orderIndex } = allFiles[idx];
         const form = new FormData();
         for (const p of t.parameters) form.append(p.name, p.value);
         form.append("file", file, file.name);
@@ -200,7 +345,14 @@ export default function DuplicatePage() {
           const text = await resp.text().catch(() => "");
           throw new Error(`Upload failed (${resp.status}) ${text}`);
         }
-        perRowUrls[i].urls.push(t.resourceUrl);
+        
+        // Insert the uploaded URL at the correct position based on order
+        const rowUrls = perRowUrls[i].urls;
+        if (orderIndex >= rowUrls.length) {
+          rowUrls.push(t.resourceUrl);
+        } else {
+          rowUrls.splice(orderIndex, 0, t.resourceUrl);
+        }
       })
     );
 
@@ -241,10 +393,21 @@ export default function DuplicatePage() {
         }
         
         if (fields.images) {
-          const imageUrls = [
-            ...((stagedByRow.find((x) => ri === x.i)?.urls) ?? []),
-            ...(r.imageUrls ?? []),
-          ];
+          // Get ordered images for this row
+          const orderedImages = getOrderedImages(r);
+          const imageUrls: string[] = [];
+          
+          // First add uploaded files (already in correct order from uploadImagesIfNeeded)
+          const uploadedUrls = stagedByRow.find((x) => ri === x.i)?.urls ?? [];
+          imageUrls.push(...uploadedUrls);
+          
+          // Then add external URLs in their order
+          orderedImages.forEach(img => {
+            if (img && img.type === 'url' && typeof img.data === 'string') {
+              imageUrls.push(img.data);
+            }
+          });
+          
           if (imageUrls.length > 0) {
             duplicateData.imageUrls = imageUrls;
           }
@@ -387,7 +550,7 @@ export default function DuplicatePage() {
                         )}
                                                  <Banner tone="success">
                            <Text as="p" variant="bodyMd">
-                             <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product.
+                             <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product. Sales channels and collections will also be copied to each duplicate.
                            </Text>
                          </Banner>
                       </BlockStack>
@@ -415,7 +578,14 @@ export default function DuplicatePage() {
                       {rows.map((row, i) => (
                         <div key={i}>
                           <InlineStack align="space-between" blockAlign="center">
-                            <Text as="h3" variant="bodyLg">Duplicate #{i + 1} {row.title && <Text as="span" variant="bodyMd" tone="subdued">({row.title})</Text>}</Text>
+                            <InlineStack gap="200" blockAlign="center">
+                              <Text as="h3" variant="bodyLg">Duplicate #{i + 1} {row.title && <Text as="span" variant="bodyMd" tone="subdued">({row.title})</Text>}</Text>
+                              {fields.images && (row.imageFiles.length > 0 || row.imageUrls.length > 0) && (
+                                <Tag>
+                                  {getOrderedImages(row).length} image{getOrderedImages(row).length !== 1 ? 's' : ''}
+                                </Tag>
+                              )}
+                            </InlineStack>
                             <Button onClick={() => handleOpenModal(i)}>
                               Edit
                             </Button>
@@ -465,14 +635,16 @@ export default function DuplicatePage() {
                     variant="plain"
                     onClick={() => {
                       if (selectedProduct) {
-                                                                                                   updateRow(activeModalRow, {
-                            title: selectedProduct.title || "",
-                            descriptionHtml: selectedProduct.description || "",
-                            vendor: selectedProduct.vendor || "",
-                            tags: Array.isArray(selectedProduct.tags) ? selectedProduct.tags.join(", ") : selectedProduct.tags || "",
-                            productType: selectedProduct.productType || "",
-                            price: selectedProduct.price || "",
-                          });
+                        updateRow(activeModalRow, {
+                          title: selectedProduct.title || "",
+                          descriptionHtml: selectedProduct.description || "",
+                          vendor: selectedProduct.vendor || "",
+                          tags: Array.isArray(selectedProduct.tags) ? selectedProduct.tags.join(", ") : selectedProduct.tags || "",
+                          productType: selectedProduct.productType || "",
+                          price: selectedProduct.price || "",
+                        });
+                        // Reset image order to default (files first, then URLs)
+                        resetImageOrder(activeModalRow);
                       }
                     }}
                   >
@@ -501,27 +673,120 @@ export default function DuplicatePage() {
                
               {fields.images && (
                 <BlockStack gap="200">
-                  <Text as="h4" variant="headingSm">Replacement images</Text>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h4" variant="headingSm">Replacement images</Text>
+                    <Button
+                      size="slim"
+                      variant="plain"
+                      onClick={() => resetImageOrder(activeModalRow)}
+                    >
+                      Reset Order
+                    </Button>
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Drag and drop images to reorder them. The first image will be the main product image.
+                  </Text>
                   <DropZone
                     allowMultiple
                     onDrop={(_files, acceptedFiles) => {
                       const accepted = acceptedFiles.filter((f) => f.type.startsWith("image/"));
-                      updateRow(activeModalRow, { imageFiles: [...modalRow.imageFiles, ...accepted] });
+                      addImageFiles(activeModalRow, accepted);
                     }}
                     type="image"
                   >
                     <DropZone.FileUpload actionTitle="Add images" actionHint="PNG, JPG, GIF, WEBP" />
                   </DropZone>
-                  <LegacyStack wrap spacing="tight">
-                    {modalRow.imageFiles.map((f, fi) => (<Tag key={fi} onRemove={() => removeFileAt(activeModalRow, fi)}>{f.name}</Tag>))}
-                    {modalRow.imageUrls.map((u, ui) => (<Tag key={ui} onRemove={() => removeUrlAt(activeModalRow, ui)}>{u}</Tag>))}
-                  </LegacyStack>
+                  
+                  {/* Display ordered images */}
+                  <BlockStack gap="200">
+                    {getOrderedImages(modalRow).length === 0 ? (
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        No images added yet. Upload files or add URLs to get started.
+                      </Text>
+                    ) : (
+                      getOrderedImages(modalRow).map((img, displayIndex) => {
+                        if (!img) return null;
+                        
+                        const isFile = img.type === 'file';
+                        const originalIndex = img.index;
+                        const displayName = isFile ? (img.data as File).name : (img.data as string);
+                        const isMainImage = displayIndex === 0;
+                        
+                        return (
+                          <div key={`${isFile ? 'file' : 'url'}-${originalIndex}`} style={{ 
+                            padding: '12px', 
+                            border: `2px solid ${isMainImage ? '#007c5b' : '#ddd'}`, 
+                            borderRadius: '6px',
+                            backgroundColor: isMainImage ? '#f0f9f6' : '#f9f9f9',
+                            cursor: 'grab'
+                          }}>
+                            <InlineStack align="space-between" blockAlign="center">
+                              <InlineStack gap="200" blockAlign="center">
+                                <div style={{
+                                  width: '24px',
+                                  height: '24px',
+                                  borderRadius: '50%',
+                                  backgroundColor: isMainImage ? '#007c5b' : '#666',
+                                  color: 'white',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '12px',
+                                  fontWeight: 'bold'
+                                }}>
+                                  {displayIndex + 1}
+                                </div>
+                                <InlineStack gap="100" blockAlign="center">
+                                  <Text as="span" variant="bodyMd">
+                                    {isFile ? '📁 ' : '🔗 '}
+                                    {displayName}
+                                  </Text>
+                                  {isMainImage && (
+                                    <Tag>
+                                      Main Image
+                                    </Tag>
+                                  )}
+                                </InlineStack>
+                              </InlineStack>
+                              <InlineStack gap="100">
+                                {displayIndex > 0 && (
+                                  <Button
+                                    size="slim"
+                                    onClick={() => reorderImages(activeModalRow, displayIndex, displayIndex - 1)}
+                                  >
+                                    ↑
+                                  </Button>
+                                )}
+                                {displayIndex < getOrderedImages(modalRow).length - 1 && (
+                                  <Button
+                                    size="slim"
+                                    onClick={() => reorderImages(activeModalRow, displayIndex, displayIndex + 1)}
+                                  >
+                                    ↓
+                                  </Button>
+                                )}
+                                <Button
+                                  size="slim"
+                                  tone="critical"
+                                  onClick={() => removeImageAt(activeModalRow, originalIndex, isFile)}
+                                >
+                                  ×
+                                </Button>
+                              </InlineStack>
+                            </InlineStack>
+                          </div>
+                        );
+                      })
+                    )}
+                  </BlockStack>
+                  
                   <InlineStack gap="200" align="start">
                     <TextField label="Or add image URL" autoComplete="off" value={modalRow.tempUrl ?? ""} onChange={(v) => updateRow(activeModalRow, { tempUrl: v })} />
                     <Button onClick={() => {
                       const v = (modalRow.tempUrl ?? "").trim();
                       if (!v) return;
-                      updateRow(activeModalRow, { imageUrls: [...modalRow.imageUrls, v], tempUrl: "" });
+                      addImageUrl(activeModalRow, v);
+                      updateRow(activeModalRow, { tempUrl: "" });
                     }}
                     >Add URL</Button>
                   </InlineStack>

@@ -66,6 +66,12 @@ const PRODUCT_BASE_QUERY = /* GraphQL */ `
           preview { image { url } }
         }
       }
+      collections(first: 250) {
+        nodes { id title }
+      }
+      resourcePublications(first: 50) {
+        nodes { publication { id name } }
+      }
     }
   }
 `;
@@ -96,6 +102,24 @@ const VARIANTS_BULK_CREATE = /* GraphQL */ `
   mutation CreateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy) {
     productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy) {
       productVariants { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+const PUBLISH_PRODUCT = /* GraphQL */ `
+  mutation PublishProduct($id: ID!, $input: PublishablePublishInput!) {
+    publishablePublish(id: $id, input: $input) {
+      publishable { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+const COLLECTION_ADD_PRODUCTS = /* GraphQL */ `
+  mutation AddToCollection($id: ID!, $productIds: [ID!]!) {
+    collectionAddProducts(id: $id, productIds: $productIds) {
+      collection { id }
       userErrors { field message }
     }
   }
@@ -150,6 +174,17 @@ export const run = async ({ params, connections, logger }: any) => {
   }
 
   console.log("[bulkDuplicateProducts] base images", baseImageUrls.length);
+
+  const baseCollectionIds: string[] = (base.collections?.nodes ?? [])
+    .map((c: any) => c?.id)
+    .filter(Boolean);
+  const basePublicationIds: string[] = (base.resourcePublications?.nodes ?? [])
+    .map((n: any) => n?.publication?.id)
+    .filter(Boolean);
+  console.log("[bulkDuplicateProducts] base collections/publications", {
+    collections: baseCollectionIds.length,
+    publications: basePublicationIds.length,
+  });
 
   const newProductIds: string[] = [];
 
@@ -277,6 +312,43 @@ export const run = async ({ params, connections, logger }: any) => {
           console.log("[bulkDuplicateProducts] applied price override to standalone variant");
         }
       }
+    }
+
+    // Publish to the same sales channels (publications)
+    if (basePublicationIds.length > 0) {
+      try {
+        const pubJson = await shopify.graphql(PUBLISH_PRODUCT, {
+          id: newProductId,
+          input: { publicationIds: basePublicationIds },
+        });
+        const pubErrs = pubJson?.publishablePublish?.userErrors ?? pubJson?.errors ?? pubJson?.data?.publishablePublish?.userErrors;
+        if (pubErrs && pubErrs.length) {
+          logger.error({ pubErrs }, "publishablePublish failed");
+        } else {
+          console.log("[bulkDuplicateProducts] publish OK to", basePublicationIds.length, "publications");
+        }
+      } catch (e) {
+        logger.error({ e }, "publishablePublish threw");
+      }
+    }
+
+    // Add to the same collections (best-effort; smart collections will be ignored by API)
+    for (const colId of baseCollectionIds) {
+      try {
+        const caJson = await shopify.graphql(COLLECTION_ADD_PRODUCTS, {
+          id: colId,
+          productIds: [newProductId],
+        });
+        const caErrs = caJson?.collectionAddProducts?.userErrors ?? caJson?.errors ?? caJson?.data?.collectionAddProducts?.userErrors;
+        if (caErrs && caErrs.length) {
+          logger.warn({ caErrs, collectionId: colId }, "collectionAddProducts had errors");
+        } else {
+          console.log("[bulkDuplicateProducts] added to collection", colId);
+        }
+      } catch (e) {
+        logger.warn({ e, collectionId: colId }, "collectionAddProducts threw");
+      }
+      await delay(75);
     }
 
     // simple throttle to be polite with rate limits
