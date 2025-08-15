@@ -41,6 +41,12 @@ type SelectedProduct = {
   productType?: string;
   price?: string;
   tags?: string[] | string;
+  totalInventory?: number;
+  category?: {
+    id: string;
+    fullName: string;
+    level: number;
+  };
 };
 
 type DuplicateRow = {
@@ -165,6 +171,8 @@ export default function DuplicatePage() {
               productType: prod?.productType,
               price: prod?.price || prod?.variants?.[0]?.price,
               tags: prod?.tags,
+              totalInventory: prod?.totalInventory,
+              category: prod?.category,
             };
             
             // Create the base row data immediately
@@ -599,6 +607,12 @@ export default function DuplicatePage() {
                     <InlineStack gap="200" align="center">
                       <Text as="span" variant="bodyMd">Selected:</Text>
                       <Tag onRemove={() => setSelectedProduct(null)}>{selectedProduct.title ?? selectedProduct.id}</Tag>
+                      {selectedProduct.category && (
+                        <Tag>Category: {selectedProduct.category.fullName}</Tag>
+                      )}
+                      {selectedProduct.totalInventory !== undefined && (
+                        <Tag>Inventory: {selectedProduct.totalInventory}</Tag>
+                      )}
                     </InlineStack>
                   )}
                 </InlineStack>
@@ -633,7 +647,7 @@ export default function DuplicatePage() {
                         )}
                         <Banner tone="success">
                           <Text as="p" variant="bodyMd">
-                            <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product. Sales channels and collections will also be copied to each duplicate.
+                            <strong>Duplication Details:</strong> All duplicated products will inherit the inventory settings, category, sales channels, and collections from the source product.
                           </Text>
                         </Banner>
                         {selectedProduct && (

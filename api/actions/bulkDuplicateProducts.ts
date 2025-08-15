@@ -47,6 +47,12 @@ const PRODUCT_BASE_QUERY = /* GraphQL */ `
       vendor
       productType
       tags
+      totalInventory
+      category {
+        id
+        fullName
+        level
+      }
       options {
         id
         name
@@ -125,6 +131,29 @@ const COLLECTION_ADD_PRODUCTS = /* GraphQL */ `
   }
 `;
 
+const SET_PRODUCT_CATEGORY = /* GraphQL */ `
+  mutation ProductSet($input: ProductInput!) {
+    productSet(input: $input) {
+      product {
+        id
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const SET_INVENTORY_LEVEL = /* GraphQL */ `
+  mutation SetInventoryLevel($input: InventorySetQuantityInput!) {
+    inventorySetQuantity(input: $input) {
+      inventoryLevel { id }
+      userErrors { field message }
+    }
+  }
+`;
+
 
 
 export const run = async ({ params, connections, logger }: any) => {
@@ -163,6 +192,8 @@ export const run = async ({ params, connections, logger }: any) => {
     title: base.title,
     options: (base.options ?? []).length,
     variants: (base.variants?.nodes ?? []).length,
+    category: base.category ? `${base.category.fullName} (Level ${base.category.level})` : 'None',
+    totalInventory: base.totalInventory,
   });
 
   const baseImageUrls: string[] = [];
@@ -184,6 +215,11 @@ export const run = async ({ params, connections, logger }: any) => {
   console.log("[bulkDuplicateProducts] base collections/publications", {
     collections: baseCollectionIds.length,
     publications: basePublicationIds.length,
+  });
+
+  console.log("[bulkDuplicateProducts] base category/inventory", {
+    category: base.category ? `${base.category.fullName} (Level ${base.category.level})` : 'None',
+    totalInventory: base.totalInventory,
   });
 
   const newProductIds: string[] = [];
@@ -347,6 +383,94 @@ export const run = async ({ params, connections, logger }: any) => {
         }
       } catch (e) {
         logger.warn({ e, collectionId: colId }, "collectionAddProducts threw");
+      }
+      await delay(75);
+    }
+
+    // Set the same category as the base product
+    // ...
+    // ...
+    if (base.category?.id) {
+      try {
+        console.log("[bulkDuplicateProducts] setting category", base.category.fullName);
+    
+        const SET_PRODUCT_CATEGORY = /* GraphQL */ `
+          mutation ProductSet($input: ProductSetInput!) {
+            productSet(input: $input) {
+              product {
+                id
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `;
+    
+        const catJson = await shopify.graphql(SET_PRODUCT_CATEGORY, {
+          input: {
+            id: newProductId,
+            // The fix is here: pass the ID directly as a string
+            category: base.category.id,
+          },
+        });
+    
+        const catErrs =
+          catJson?.productSet?.userErrors ??
+          catJson?.errors ??
+          catJson?.data?.productSet?.userErrors;
+    
+        if (catErrs && catErrs.length) {
+          logger.warn({ catErrs }, "productSet had errors");
+        } else {
+          console.log("[bulkDuplicateProducts] category set successfully");
+        }
+      } catch (e) {
+        logger.warn({ e }, "productSet threw");
+      }
+      await delay(75);
+    }
+    // ...
+    // ...
+
+    // Set the same inventory level as the base product
+    if (base.totalInventory !== undefined && base.totalInventory !== null) {
+      try {
+        console.log("[bulkDuplicateProducts] setting inventory level", base.totalInventory);
+        // First, get the location ID (we'll use the first available location)
+        const locationQuery = await shopify.graphql(`
+          query {
+            locations(first: 1) {
+              nodes {
+                id
+              }
+            }
+          }
+        `);
+        const locationId = locationQuery?.data?.locations?.nodes?.[0]?.id;
+
+        if (locationId) {
+          // Get the variant ID to set inventory
+          const variantId = created?.variants?.nodes?.[0]?.id;
+          if (variantId) {
+            const invJson = await shopify.graphql(SET_INVENTORY_LEVEL, {
+              input: {
+                locationId: locationId,
+                variantId: variantId,
+                quantity: base.totalInventory,
+              }
+            });
+            const invErrs = invJson?.inventorySetQuantity?.userErrors ?? invJson?.errors ?? invJson?.data?.inventorySetQuantity?.userErrors;
+            if (invErrs && invErrs.length) {
+              logger.warn({ invErrs }, "inventorySetQuantity had errors");
+            } else {
+              console.log("[bulkDuplicateProducts] inventory level set successfully");
+            }
+          }
+        }
+      } catch (e) {
+        logger.warn({ e }, "inventorySetQuantity threw");
       }
       await delay(75);
     }
