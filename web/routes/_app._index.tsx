@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData, useNavigate } from "@remix-run/react";
@@ -92,16 +92,47 @@ export default function DuplicatePage() {
 
   const [rows, setRows] = useState<DuplicateRow[]>([{ title: "", imageFiles: [], imageUrls: [], imageOrder: [] }]);
   const [createdLinks, setCreatedLinks] = useState<string[] | null>(null);
+  const lastSelectedProductId = useRef<string | null>(null);
 
   useEffect(() => {
+    console.log("[duplicate/ui] quantity effect", { qty, hasSelectedProduct: !!selectedProduct });
     // ensure rows length matches quantity
     setRows((prev) => {
       const next = [...prev];
-      while (next.length < qty) next.push({ title: "", imageFiles: [], imageUrls: [], imageOrder: [] });
+      while (next.length < qty) {
+        // If we have a selected product, populate new rows with its data
+        const baseRowData = getBaseRowData();
+        if (baseRowData) {
+          console.log("[duplicate/ui] adding new row with product data");
+          next.push(baseRowData);
+        } else {
+          console.log("[duplicate/ui] adding new empty row");
+          next.push({ title: "", imageFiles: [], imageUrls: [], imageOrder: [] });
+        }
+      }
       while (next.length > qty) next.pop();
       return next;
     });
   }, [qty]);
+
+  // Separate effect to populate existing rows when selectedProduct changes
+  useEffect(() => {
+    console.log("[duplicate/ui] selectedProduct effect", { 
+      hasSelectedProduct: !!selectedProduct, 
+      rowsLength: rows.length, 
+      lastId: lastSelectedProductId.current,
+      currentId: selectedProduct?.id 
+    });
+    
+    if (selectedProduct && rows.length > 0 && selectedProduct.id !== lastSelectedProductId.current) {
+      console.log("[duplicate/ui] populating rows with selected product data");
+      const baseRowData = getBaseRowData();
+      if (baseRowData) {
+        setRows(prev => prev.map(() => ({ ...baseRowData })));
+        lastSelectedProductId.current = selectedProduct.id;
+      }
+    }
+  }, [selectedProduct]);
 
   const handlePickProduct = async () => {
     setPicking(true);
@@ -118,11 +149,26 @@ export default function DuplicatePage() {
           return;
         }
                  const gid = rawId?.startsWith("gid://") ? rawId : `gid://shopify/Product/${rawId}`;
-         setSelectedProduct({ id: gid, title: prod?.title, status: prod?.status, collections: prod?.collections, metafields: prod?.metafields, inventory: prod?.inventory, description: prod?.description, vendor: prod?.vendor, productType: prod?.productType, price: prod?.price });
          
-                   // Pre-populate the first row with the selected product's data for easy modification
+                   // Pre-populate all existing rows with the selected product's data for easy modification
           if (prod) {
-            setRows([{
+            // Update selectedProduct first so populateAllRowsWithSelectedProduct can use it
+            const productData = {
+              id: gid,
+              title: prod?.title,
+              status: prod?.status,
+              collections: prod?.collections,
+              metafields: prod?.metafields,
+              inventory: prod?.inventory,
+              description: prod?.descriptionHtml || prod?.description,
+              vendor: prod?.vendor,
+              productType: prod?.productType,
+              price: prod?.price || prod?.variants?.[0]?.price,
+              tags: prod?.tags,
+            };
+            
+            // Create the base row data immediately
+            const baseRowData = {
               title: prod.title || "",
               imageFiles: [],
               imageUrls: [],
@@ -132,7 +178,17 @@ export default function DuplicatePage() {
               productType: prod.productType || "",
               price: prod.price || prod.variants?.[0]?.price || "",
               imageOrder: [],
-            }]);
+            };
+            
+            // Set the selected product state
+            setSelectedProduct(productData);
+            
+            // Reset the ref to ensure the effect runs
+            lastSelectedProductId.current = null;
+            
+            // Immediately populate all existing rows with the selected product data
+            console.log("[duplicate/ui] immediately populating rows with product data", { rowsCount: rows.length });
+            setRows(prev => prev.map(() => ({ ...baseRowData })));
           }
       }
     } catch (err) {
@@ -299,6 +355,33 @@ export default function DuplicatePage() {
       next[rowIndex] = { ...currentRow, imageOrder: newOrder };
       return next;
     });
+  };
+
+  const getBaseRowData = () => {
+    if (!selectedProduct) return null;
+    
+    return {
+      title: selectedProduct.title || "",
+      imageFiles: [],
+      imageUrls: [],
+      descriptionHtml: selectedProduct.description || "",
+      vendor: selectedProduct.vendor || "",
+      tags: Array.isArray(selectedProduct.tags) ? selectedProduct.tags.join(", ") : selectedProduct.tags || "",
+      productType: selectedProduct.productType || "",
+      price: selectedProduct.price || "",
+      imageOrder: [],
+    };
+  };
+
+  const populateAllRowsWithSelectedProduct = () => {
+    const baseRowData = getBaseRowData();
+    if (!baseRowData) return;
+    
+    setRows(prev => prev.map(() => ({ ...baseRowData })));
+    // Update the ref to prevent the effect from running again
+    if (selectedProduct) {
+      lastSelectedProductId.current = selectedProduct.id;
+    }
   };
 
   const canSubmit = Boolean(selectedProduct) && rows.every((r) => !fields.title || r.title.trim().length > 0);
@@ -548,11 +631,21 @@ export default function DuplicatePage() {
                             </Text>
                           </Banner>
                         )}
-                                                 <Banner tone="success">
-                           <Text as="p" variant="bodyMd">
-                             <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product. Sales channels and collections will also be copied to each duplicate.
-                           </Text>
-                         </Banner>
+                        <Banner tone="success">
+                          <Text as="p" variant="bodyMd">
+                            <strong>Inventory Note:</strong> All duplicated products will inherit the inventory settings from the source product. Sales channels and collections will also be copied to each duplicate.
+                          </Text>
+                        </Banner>
+                        {selectedProduct && (
+                          <InlineStack align="start">
+                            <Button
+                              variant="plain"
+                              onClick={populateAllRowsWithSelectedProduct}
+                            >
+                              Reset all rows to original product data
+                            </Button>
+                          </InlineStack>
+                        )}
                       </BlockStack>
                       <BlockStack gap="300">
                         <Text as="h3" variant="headingMd">Quantity</Text>
